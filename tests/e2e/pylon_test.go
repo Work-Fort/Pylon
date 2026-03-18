@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -291,5 +292,211 @@ func TestServices_267NoUI(t *testing.T) {
 	}
 	if svc.UI {
 		t.Fatal("expected ui=false")
+	}
+}
+
+func TestServices_Unreachable(t *testing.T) {
+	// Get a free port that nothing is listening on.
+	deadAddr, err := harness.FreePort()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	addr, err := harness.FreePort()
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := harness.StartDaemon(pylonBin, addr,
+		harness.WithServices([]string{"http://" + deadAddr}),
+		harness.WithPollInterval("1s"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.StopFatal(t)
+
+	time.Sleep(2 * time.Second)
+
+	token := d.SignJWT("uuid-carol", "carol", "Carol", "user")
+
+	req, err := http.NewRequest("GET", fmt.Sprintf("http://%s/api/services", addr), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /api/services: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var body struct {
+		Services []struct {
+			Name      string `json:"name"`
+			Connected bool   `json:"connected"`
+			UI        bool   `json:"ui"`
+		} `json:"services"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+
+	if len(body.Services) != 1 {
+		t.Fatalf("expected 1 service, got %d", len(body.Services))
+	}
+
+	svc := body.Services[0]
+	if svc.Connected {
+		t.Fatal("expected connected=false for unreachable service")
+	}
+	if svc.UI {
+		t.Fatal("expected ui=false for unreachable service")
+	}
+}
+
+func TestServices_5xxError(t *testing.T) {
+	// Service that responds with 500 Internal Server Error.
+	fakeSvc := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("internal error"))
+	}))
+	defer fakeSvc.Close()
+
+	addr, err := harness.FreePort()
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := harness.StartDaemon(pylonBin, addr,
+		harness.WithServices([]string{fakeSvc.URL}),
+		harness.WithPollInterval("1s"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.StopFatal(t)
+
+	time.Sleep(2 * time.Second)
+
+	token := d.SignJWT("uuid-dave", "dave", "Dave", "user")
+
+	req, err := http.NewRequest("GET", fmt.Sprintf("http://%s/api/services", addr), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /api/services: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var body struct {
+		Services []struct {
+			Name      string `json:"name"`
+			Connected bool   `json:"connected"`
+			UI        bool   `json:"ui"`
+		} `json:"services"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+
+	if len(body.Services) != 1 {
+		t.Fatalf("expected 1 service, got %d", len(body.Services))
+	}
+
+	svc := body.Services[0]
+	// Server responded (connected=true) but with an error, not a health manifest
+	if !svc.Connected {
+		t.Fatal("expected connected=true for 5xx service (server responded)")
+	}
+	if svc.UI {
+		t.Fatal("expected ui=false for 5xx service")
+	}
+}
+
+func TestServices_Timeout(t *testing.T) {
+	// Start a server that accepts connections but never responds,
+	// causing the prober's 5-second timeout to fire.
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	hangAddr := listener.Addr().String()
+
+	// Accept connections in background but never write a response.
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			// Hold the connection open — never respond.
+			go func(c net.Conn) {
+				buf := make([]byte, 1024)
+				for {
+					_, err := c.Read(buf)
+					if err != nil {
+						return
+					}
+				}
+			}(conn)
+		}
+	}()
+
+	addr, err := harness.FreePort()
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := harness.StartDaemon(pylonBin, addr,
+		harness.WithServices([]string{"http://" + hangAddr}),
+		harness.WithPollInterval("1s"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.StopFatal(t)
+
+	// Wait for the prober's 5s timeout + poll cycle.
+	time.Sleep(8 * time.Second)
+
+	token := d.SignJWT("uuid-eve", "eve", "Eve", "user")
+
+	req, err := http.NewRequest("GET", fmt.Sprintf("http://%s/api/services", addr), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /api/services: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var body struct {
+		Services []struct {
+			Name      string `json:"name"`
+			Connected bool   `json:"connected"`
+			UI        bool   `json:"ui"`
+		} `json:"services"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+
+	if len(body.Services) != 1 {
+		t.Fatalf("expected 1 service, got %d", len(body.Services))
+	}
+
+	svc := body.Services[0]
+	if svc.Connected {
+		t.Fatal("expected connected=false for timed-out service")
+	}
+	if svc.UI {
+		t.Fatal("expected ui=false for timed-out service")
 	}
 }
