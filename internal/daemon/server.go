@@ -3,9 +3,11 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/log"
@@ -42,8 +44,11 @@ func NewServer(ctx context.Context, cfg ServerConfig) (*http.Server, error) {
 	akV := authapikey.New(opts.VerifyAPIKeyURL, opts.APIKeyCacheTTL)
 	mw := auth.NewFromValidators(jwtV, akV)
 
-	// Wrap mux: auth middleware for /api/*, skip for /v1/health
-	handler := publicPathSkip(mw(mux), mux)
+	// /api/services uses soft auth: inject identity if token is valid,
+	// pass through if not. The handler decides what to return based on
+	// whether an identity is present.
+	// All other /api/* paths use the hard auth middleware.
+	handler := routeAuth(mw(mux), softAuth(jwtV, akV)(mux), mux)
 
 	addr := fmt.Sprintf("%s:%d", cfg.Bind, cfg.Port)
 
@@ -56,17 +61,51 @@ func NewServer(ctx context.Context, cfg ServerConfig) (*http.Server, error) {
 	}, nil
 }
 
-// publicPathSkip routes public paths directly to the mux (no auth),
-// and everything else through the auth-wrapped handler.
-func publicPathSkip(authed, unauthed http.Handler) http.Handler {
+// routeAuth selects the auth strategy per path:
+//   - /v1/health: no auth
+//   - /api/services: soft auth (inject identity if valid, pass through if not)
+//   - everything else: hard auth (401 if no valid token)
+func routeAuth(hardAuthed, softAuthed, unauthed http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v1/health":
 			unauthed.ServeHTTP(w, r)
+		case "/api/services":
+			softAuthed.ServeHTTP(w, r)
 		default:
-			authed.ServeHTTP(w, r)
+			hardAuthed.ServeHTTP(w, r)
 		}
 	})
+}
+
+// softAuth tries to validate a bearer token and inject the identity into
+// context if valid, but always passes the request through to the next
+// handler regardless. This allows handlers to branch on identity presence.
+func softAuth(validators ...auth.Validator) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			h := r.Header.Get("Authorization")
+			token, found := strings.CutPrefix(h, "Bearer ")
+			if !found || token == "" {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			for _, v := range validators {
+				id, err := v.Validate(r.Context(), token)
+				if err == nil {
+					ctx := auth.ContextWithIdentity(r.Context(), id)
+					next.ServeHTTP(w, r.WithContext(ctx))
+					return
+				}
+			}
+
+			// Token present but invalid — return 401
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			json.NewEncoder(w).Encode(map[string]string{"error": "invalid token"})
+		})
+	}
 }
 
 // ListenAndServe starts the server on the configured address.
