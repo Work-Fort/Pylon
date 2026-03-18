@@ -1439,7 +1439,7 @@ Can survive a full rewrite of Pylon in another language.
 
 `tests/e2e/go.mod`:
 ```
-module github.com/Work-Fort/pylon-e2e
+module github.com/Work-Fort/Pylon/tests/e2e
 
 go 1.26.0
 
@@ -1490,7 +1490,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Work-Fort/pylon-e2e/harness"
+	"github.com/Work-Fort/Pylon/tests/e2e/harness"
 )
 
 var pylonBin string
