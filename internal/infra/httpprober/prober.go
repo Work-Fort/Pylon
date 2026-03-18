@@ -53,6 +53,6 @@ func (p *Prober) Probe(ctx context.Context, baseURL string) domain.ProbeResult {
 	case 267:
 		return domain.ProbeResult{Manifest: manifest, Connected: true, UI: false}
 	default:
-		return domain.ProbeResult{}
+		return domain.ProbeResult{Connected: true}
 	}
 }

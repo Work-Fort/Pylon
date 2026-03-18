@@ -69,6 +69,9 @@ func TestProbe_NoUI(t *testing.T) {
 	if result.Manifest.Name != "hive" {
 		t.Errorf("name = %q, want hive", result.Manifest.Name)
 	}
+	if result.Manifest.Display != "nav" {
+		t.Errorf("display = %q, want nav (default)", result.Manifest.Display)
+	}
 }
 
 func TestProbe_Unreachable(t *testing.T) {
