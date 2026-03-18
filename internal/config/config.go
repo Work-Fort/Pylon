@@ -85,6 +85,7 @@ func InitViper() {
 	viper.SetDefault("log-level", "debug")
 	viper.SetDefault("passport-url", "")
 	viper.SetDefault("poll-interval", "10s")
+	viper.SetDefault("probe-timeout", "5s")
 
 	viper.SetConfigName(ConfigFileName)
 	viper.SetConfigType(ConfigType)

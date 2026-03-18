@@ -16,10 +16,10 @@ type Prober struct {
 	client *http.Client
 }
 
-// New creates a Prober with a 5-second timeout.
-func New() *Prober {
+// New creates a Prober with the given per-probe timeout.
+func New(timeout time.Duration) *Prober {
 	return &Prober{
-		client: &http.Client{Timeout: 5 * time.Second},
+		client: &http.Client{Timeout: timeout},
 	}
 }
 

@@ -45,7 +45,8 @@ func NewCmd() *cobra.Command {
 			if passportURL == "" {
 				return fmt.Errorf("--passport-url is required")
 			}
-			return run(bind, port, passportURL, pollInterval)
+			probeTimeout := viper.GetString("probe-timeout")
+			return run(bind, port, passportURL, pollInterval, probeTimeout)
 		},
 	}
 
@@ -59,10 +60,15 @@ func NewCmd() *cobra.Command {
 	return cmd
 }
 
-func run(bind string, port int, passportURL, pollIntervalStr string) error {
+func run(bind string, port int, passportURL, pollIntervalStr, probeTimeoutStr string) error {
 	pollInterval, err := time.ParseDuration(pollIntervalStr)
 	if err != nil {
 		return fmt.Errorf("invalid poll-interval %q: %w", pollIntervalStr, err)
+	}
+
+	probeTimeout, err := time.ParseDuration(probeTimeoutStr)
+	if err != nil {
+		return fmt.Errorf("invalid probe-timeout %q: %w", probeTimeoutStr, err)
 	}
 
 	services := config.Services()
@@ -75,7 +81,7 @@ func run(bind string, port int, passportURL, pollIntervalStr string) error {
 		log.Warn("no services configured — pylon will serve an empty listing")
 	}
 
-	prober := httpprober.New()
+	prober := httpprober.New(probeTimeout)
 	registry := pylonDaemon.NewRegistry(prober, urls)
 
 	srv, err := pylonDaemon.NewServer(context.Background(), pylonDaemon.ServerConfig{

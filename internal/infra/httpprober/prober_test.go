@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/Work-Fort/Pylon/internal/infra/httpprober"
 )
@@ -28,7 +29,7 @@ func TestProbe_Healthy(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := httpprober.New()
+	p := httpprober.New(5 * time.Second)
 	result := p.Probe(context.Background(), srv.URL)
 
 	if !result.Connected {
@@ -57,7 +58,7 @@ func TestProbe_NoUI(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := httpprober.New()
+	p := httpprober.New(5 * time.Second)
 	result := p.Probe(context.Background(), srv.URL)
 
 	if !result.Connected {
@@ -75,7 +76,7 @@ func TestProbe_NoUI(t *testing.T) {
 }
 
 func TestProbe_Unreachable(t *testing.T) {
-	p := httpprober.New()
+	p := httpprober.New(5 * time.Second)
 	result := p.Probe(context.Background(), "http://127.0.0.1:1")
 
 	if result.Connected {
