@@ -1422,36 +1422,331 @@ git commit -m "chore: add go.sum after dependency resolution"
 
 ---
 
-### Task 10: Verify end-to-end build and startup
+### Task 10: End-to-end test suite
 
-**Step 1: Build the binary**
+Standalone e2e test module — separate go.mod, zero imports from Pylon
+internals. Builds the binary, spawns it as a subprocess, tests over HTTP.
+Can survive a full rewrite of Pylon in another language.
 
-Run: `mise run build/dev`
-Expected: `build/pylon` binary created
+**Files:**
+- Create: `tests/e2e/go.mod`
+- Create: `tests/e2e/harness/harness.go`
+- Create: `tests/e2e/harness/jwks_stub.go`
+- Create: `tests/e2e/pylon_test.go`
+- Create: `.mise/tasks/e2e`
 
-**Step 2: Verify help output**
+**Step 1: Create the e2e Go module**
 
-```bash
-./build/pylon --help
-./build/pylon daemon --help
+`tests/e2e/go.mod`:
+```
+module github.com/Work-Fort/pylon-e2e
+
+go 1.26.0
+
+require (
+	github.com/lestrrat-go/jwx/v2 v2.1.6
+)
 ```
 
-Expected: Usage text showing all flags
+Then: `cd tests/e2e && go mod tidy`
 
-**Step 3: Smoke test startup (briefly)**
+**Step 2: Write the JWKS stub**
 
-```bash
-./build/pylon daemon --passport-url http://localhost:3000 &
-PID=$!
-sleep 2
-curl -s http://127.0.0.1:18000/v1/health
-curl -s http://127.0.0.1:18000/api/services
-kill $PID
+`tests/e2e/harness/jwks_stub.go` — starts a local HTTP server that serves
+a JWKS endpoint and provides a `SignJWT` function for test tokens. Follow
+Sharkfin's pattern exactly (same RSA key generation, same JWT claims
+structure).
+
+**Step 3: Write the test harness**
+
+`tests/e2e/harness/harness.go`:
+- `StartDaemon(binary, addr string, opts ...DaemonOption) (*Daemon, error)`
+  — starts the JWKS stub, writes a temp config with service URLs, spawns
+  the pylon binary with `--passport-url` pointing at the stub, waits for
+  TCP readiness
+- `Daemon.Stop()` — sends SIGTERM, waits, cleans up temp dirs
+- `Daemon.SignJWT(id, username, displayName, userType string) string`
+- `Daemon.Addr() string`
+- `FreePort() (string, error)`
+- `DaemonOption`: `WithServices(urls []string)` to configure which fake
+  services the daemon should poll
+
+**Step 4: Write the e2e tests**
+
+`tests/e2e/pylon_test.go`:
+
+```go
+// SPDX-License-Identifier: GPL-3.0-or-later
+package e2e
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/Work-Fort/pylon-e2e/harness"
+)
+
+var pylonBin string
+
+func TestMain(m *testing.M) {
+	tmpDir, err := os.MkdirTemp("", "pylon-e2e-bin-*")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "create temp dir: %v\n", err)
+		os.Exit(1)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	binPath := filepath.Join(tmpDir, "pylon")
+	wd, _ := os.Getwd()
+	projectRoot := filepath.Join(wd, "..", "..")
+	cmd := exec.Command("go", "build", "-race", "-o", binPath, ".")
+	cmd.Dir = projectRoot
+	cmd.Stdout = os.Stderr
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "build pylon: %v\n", err)
+		os.Exit(1)
+	}
+
+	pylonBin = binPath
+	os.Exit(m.Run())
+}
+
+func TestHealth(t *testing.T) {
+	addr, err := harness.FreePort()
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := harness.StartDaemon(pylonBin, addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.StopFatal(t)
+
+	resp, err := http.Get(fmt.Sprintf("http://%s/v1/health", addr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	var body map[string]string
+	json.NewDecoder(resp.Body).Decode(&body)
+	if body["status"] != "healthy" {
+		t.Errorf("status = %q", body["status"])
+	}
+}
+
+func TestServices_Unauthenticated(t *testing.T) {
+	addr, err := harness.FreePort()
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := harness.StartDaemon(pylonBin, addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.StopFatal(t)
+
+	resp, err := http.Get(fmt.Sprintf("http://%s/api/services", addr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	var body struct {
+		PassportURL string `json:"passport_url"`
+	}
+	json.NewDecoder(resp.Body).Decode(&body)
+	if body.PassportURL == "" {
+		t.Error("expected passport_url in unauthenticated response")
+	}
+}
+
+func TestServices_Authenticated(t *testing.T) {
+	// Start a fake service that serves /ui/health
+	fakeSvc := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"name":    "fakesvc",
+			"label":   "Fake",
+			"route":   "/fake",
+			"display": "nav",
+		})
+	}))
+	defer fakeSvc.Close()
+
+	addr, err := harness.FreePort()
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := harness.StartDaemon(pylonBin, addr,
+		harness.WithServices([]string{fakeSvc.URL}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.StopFatal(t)
+
+	// Wait for at least one poll cycle
+	time.Sleep(2 * time.Second)
+
+	token := d.SignJWT("user-1", "testuser", "Test", "user")
+	req, _ := http.NewRequest("GET",
+		fmt.Sprintf("http://%s/api/services", addr), nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	var body struct {
+		Services []struct {
+			Name      string `json:"name"`
+			Connected bool   `json:"connected"`
+			UI        bool   `json:"ui"`
+		} `json:"services"`
+	}
+	json.NewDecoder(resp.Body).Decode(&body)
+
+	if len(body.Services) != 1 {
+		t.Fatalf("got %d services, want 1", len(body.Services))
+	}
+	svc := body.Services[0]
+	if svc.Name != "fakesvc" {
+		t.Errorf("name = %q, want fakesvc", svc.Name)
+	}
+	if !svc.Connected || !svc.UI {
+		t.Errorf("connected=%v ui=%v, want true/true", svc.Connected, svc.UI)
+	}
+}
+
+func TestServices_InvalidToken(t *testing.T) {
+	addr, err := harness.FreePort()
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := harness.StartDaemon(pylonBin, addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.StopFatal(t)
+
+	req, _ := http.NewRequest("GET",
+		fmt.Sprintf("http://%s/api/services", addr), nil)
+	req.Header.Set("Authorization", "Bearer garbage-token")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 401 {
+		t.Fatalf("status = %d, want 401", resp.StatusCode)
+	}
+}
+
+func TestServices_267NoUI(t *testing.T) {
+	// Fake service returning 267 (registered, no UI)
+	fakeSvc := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(267)
+		json.NewEncoder(w).Encode(map[string]any{
+			"name":  "noui",
+			"label": "No UI",
+			"route": "/noui",
+		})
+	}))
+	defer fakeSvc.Close()
+
+	addr, err := harness.FreePort()
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := harness.StartDaemon(pylonBin, addr,
+		harness.WithServices([]string{fakeSvc.URL}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.StopFatal(t)
+
+	time.Sleep(2 * time.Second)
+
+	token := d.SignJWT("user-1", "testuser", "Test", "user")
+	req, _ := http.NewRequest("GET",
+		fmt.Sprintf("http://%s/api/services", addr), nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var body struct {
+		Services []struct {
+			Name      string `json:"name"`
+			Connected bool   `json:"connected"`
+			UI        bool   `json:"ui"`
+		} `json:"services"`
+	}
+	json.NewDecoder(resp.Body).Decode(&body)
+
+	if len(body.Services) != 1 {
+		t.Fatalf("got %d services, want 1", len(body.Services))
+	}
+	svc := body.Services[0]
+	if !svc.Connected {
+		t.Error("expected connected=true")
+	}
+	if svc.UI {
+		t.Error("expected ui=false for 267 service")
+	}
+}
 ```
 
-Expected: Health returns `{"status":"healthy"}`, services returns
-`{"passport_url":"http://localhost:3000"}` (no auth token).
+**Step 5: Create the e2e mise task**
 
-**Step 4: Commit any final fixes**
+`.mise/tasks/e2e`:
+```bash
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+#MISE description="Run end-to-end tests"
+#MISE depends=["build/dev"]
+#MISE dir="tests/e2e"
+set -euo pipefail
 
-Only if smoke test revealed issues.
+go test -v -race -timeout 180s
+```
+
+**Step 6: Run e2e tests**
+
+Run: `mise run e2e`
+Expected: PASS — all five tests pass
+
+**Step 7: Commit**
+
+```bash
+git add tests/e2e/ .mise/tasks/e2e
+git commit -m "test: add standalone e2e test suite with JWKS stub and fake services"
+```
