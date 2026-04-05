@@ -45,8 +45,10 @@ type Service struct {
     UI               bool     `json:"ui"`
     Connected        bool     `json:"connected"`
     SetupMode        bool     `json:"setup_mode"`
-    WSPaths          []string `json:"ws_paths,omitempty"`
-    NotificationPath string   `json:"notification_path,omitempty"`
+    AdminOnly        bool     `json:"admin_only"`
+    Display          string   `json:"display"`
+    WSPaths          []string `json:"ws_paths"`
+    NotificationPath *string  `json:"notification_path,omitempty"`
 }
 
 // Sentinel errors
