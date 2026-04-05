@@ -87,3 +87,63 @@ func TestServices_Unreachable(t *testing.T) {
 		t.Fatal("expected error for unreachable server")
 	}
 }
+
+func TestServiceByName_Found(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"services": []map[string]any{
+				{"name": "hive", "label": "Hive", "base_url": "http://hive:17000", "connected": true},
+				{"name": "sharkfin", "label": "Chat", "base_url": "http://sharkfin:16000", "connected": true},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c := client.New(srv.URL, "token")
+	svc, err := c.ServiceByName(context.Background(), "sharkfin")
+	if err != nil {
+		t.Fatalf("ServiceByName() error: %v", err)
+	}
+	if svc.Name != "sharkfin" {
+		t.Errorf("name = %q, want sharkfin", svc.Name)
+	}
+	if svc.BaseURL != "http://sharkfin:16000" {
+		t.Errorf("base_url = %q", svc.BaseURL)
+	}
+}
+
+func TestServiceByName_NotFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"services": []map[string]any{
+				{"name": "hive", "label": "Hive", "base_url": "http://hive:17000"},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c := client.New(srv.URL, "token")
+	_, err := c.ServiceByName(context.Background(), "nonexistent")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !errors.Is(err, client.ErrNotFound) {
+		t.Errorf("error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestServiceByName_EmptyList(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"services": []any{}})
+	}))
+	defer srv.Close()
+
+	c := client.New(srv.URL, "token")
+	_, err := c.ServiceByName(context.Background(), "anything")
+	if !errors.Is(err, client.ErrNotFound) {
+		t.Errorf("error = %v, want ErrNotFound", err)
+	}
+}

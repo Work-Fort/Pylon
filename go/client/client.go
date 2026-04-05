@@ -79,3 +79,18 @@ func decodeAPIError(resp *http.Response) *APIError {
 	}
 	return ae
 }
+
+// ServiceByName returns a specific service by its registered name.
+// Returns ErrNotFound if the service is not in the registry.
+func (c *Client) ServiceByName(ctx context.Context, name string) (*Service, error) {
+	services, err := c.Services(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for i := range services {
+		if services[i].Name == name {
+			return &services[i], nil
+		}
+	}
+	return nil, fmt.Errorf("%w: %s", ErrNotFound, name)
+}
