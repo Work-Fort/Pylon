@@ -107,16 +107,16 @@ All other fields are passed through from the service's health manifest.
 
 ## How Scope connects to Pylon
 
-In the fort config, a non-local fort with a `gateway` URL points at Pylon:
+In the fort config, a non-local fort with a `pylon` URL points at Pylon:
 
 ```yaml
 forts:
   acme:
     local: false
-    gateway: "https://pylon.acme.workfort.dev"
+    pylon: "https://pylon.acme.workfort.dev"
 ```
 
-When `local` is `false`, Scope fetches the service list from the gateway
+When `local` is `false`, Scope fetches the service list from Pylon
 instead of probing individual URLs.
 
 **Pylon is not a proxy in this version.** It only serves the service listing.
