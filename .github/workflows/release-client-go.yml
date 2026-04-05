@@ -1,0 +1,102 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: Release Go Client
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'go/client/**'
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: jdx/mise-action@v3
+      - run: mise run ci
+
+  tag:
+    name: Create Client Tag
+    runs-on: ubuntu-latest
+    needs: test
+    outputs:
+      new_tag: ${{ steps.tag_version.outputs.new_tag }}
+      changelog: ${{ steps.tag_version.outputs.changelog }}
+      should_release: ${{ steps.check_tag.outputs.should_release }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Bump version and create tag
+        id: tag_version
+        uses: Work-Fort/github-tag-action@v6.3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          default_bump: false
+          release_branches: master
+          tag_prefix: go/client/v
+          paths: go/client/**
+
+      - name: Check if new tag was created
+        id: check_tag
+        run: |
+          if [ -n "$TAG" ]; then
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          TAG: ${{ steps.tag_version.outputs.new_tag }}
+
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: tag
+    if: needs.tag.outputs.should_release == 'true'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.tag.outputs.new_tag }}
+
+      - name: Create release notes
+        env:
+          TAG: ${{ needs.tag.outputs.new_tag }}
+          CHANGELOG: ${{ needs.tag.outputs.changelog }}
+        run: |
+          VERSION=$(echo "$TAG" | sed 's|^go/client/v||')
+          cat > release-notes.md << EOF
+          # Go Client v${VERSION}
+
+          Module: \`github.com/Work-Fort/Pylon/go/client\`
+
+          ## What's Changed
+
+          ${CHANGELOG}
+
+          ## Usage
+
+          \`\`\`bash
+          go get github.com/Work-Fort/Pylon/go/client@${TAG}
+          \`\`\`
+
+          ---
+
+          Built automatically by Pylon CI
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.tag.outputs.new_tag }}
+          name: Go Client ${{ needs.tag.outputs.new_tag }}
+          body_path: release-notes.md
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
