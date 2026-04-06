@@ -13,8 +13,8 @@ This follows the same pattern as:
 
 ## Location
 
-`go/client/` within the Pylon repo, importable as
-`github.com/Work-Fort/Pylon/go/client`.
+`client/go/` within the Pylon repo, importable as
+`github.com/Work-Fort/Pylon/client/go`.
 
 ## Client API
 
