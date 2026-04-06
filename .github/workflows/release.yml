@@ -19,6 +19,7 @@ jobs:
     outputs:
       new_tag: ${{ steps.tag_version.outputs.new_tag }}
       changelog: ${{ steps.tag_version.outputs.changelog }}
+      should_release: ${{ steps.check_tag.outputs.should_release }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -32,3 +33,111 @@ jobs:
           default_bump: false
           release_branches: master
           tag_prefix: v
+
+      - name: Check if new tag was created
+        id: check_tag
+        run: |
+          if [ -n "$TAG" ]; then
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          TAG: ${{ steps.tag_version.outputs.new_tag }}
+
+  build:
+    name: Build (linux-amd64)
+    runs-on: ubuntu-latest
+    needs: tag
+    if: needs.tag.outputs.should_release == 'true'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.tag.outputs.new_tag }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - uses: jdx/mise-action@v3
+
+      - name: Build release binary
+        env:
+          TAG: ${{ needs.tag.outputs.new_tag }}
+        run: |
+          VERSION=$(echo "$TAG" | sed 's/^v//')
+          VERSION=$VERSION GOARCH=amd64 mise run build:release
+
+      - name: Compress and generate checksum
+        run: |
+          cd build
+          mv pylon pylon-linux-amd64
+          xz -z -9 pylon-linux-amd64
+          sha256sum pylon-linux-amd64.xz > SHA256SUMS
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pylon-linux-amd64-${{ needs.tag.outputs.new_tag }}
+          path: |
+            build/pylon-linux-amd64.xz
+            build/SHA256SUMS
+          retention-days: 7
+
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [tag, build]
+    if: needs.tag.outputs.should_release == 'true'
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: pylon-linux-amd64-${{ needs.tag.outputs.new_tag }}
+          path: release-artifacts
+
+      - name: Create release notes
+        env:
+          TAG: ${{ needs.tag.outputs.new_tag }}
+          CHANGELOG: ${{ needs.tag.outputs.changelog }}
+          REPO: ${{ github.repository }}
+        run: |
+          VERSION=$(echo "$TAG" | sed 's/^v//')
+          cat > release-notes.md << EOF
+          # Pylon v${VERSION}
+
+          ## What's Changed
+
+          ${CHANGELOG}
+
+          ## Installation
+
+          ### Linux (x86_64)
+          \`\`\`bash
+          wget https://github.com/${REPO}/releases/download/${TAG}/pylon-linux-amd64.xz
+          xz -d pylon-linux-amd64.xz
+          chmod +x pylon-linux-amd64
+          sudo mv pylon-linux-amd64 /usr/local/bin/pylon
+          \`\`\`
+
+          ## Verification
+
+          \`\`\`bash
+          wget https://github.com/${REPO}/releases/download/${TAG}/SHA256SUMS
+          sha256sum -c SHA256SUMS --ignore-missing
+          \`\`\`
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.tag.outputs.new_tag }}
+          name: Release ${{ needs.tag.outputs.new_tag }}
+          body_path: release-notes.md
+          draft: false
+          prerelease: false
+          files: |
+            release-artifacts/pylon-linux-amd64.xz
+            release-artifacts/SHA256SUMS
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
