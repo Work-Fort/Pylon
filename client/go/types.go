@@ -1,8 +1,4 @@
 // SPDX-License-Identifier: Apache-2.0
-
-// Package client provides a Go HTTP client for the Pylon service registry API.
-// It has zero dependencies on internal Pylon packages and can be imported
-// freely by external consumers.
 package client
 
 // Service represents a discovered WorkFort service.
