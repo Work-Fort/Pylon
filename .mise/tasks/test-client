@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+#MISE description="Run Go client library tests"
+#MISE dir="go/client"
+set -euo pipefail
+
+go test -v -race ./...

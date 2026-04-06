@@ -19,9 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: jdx/mise-action@v3
-      - name: Test Go client
-        working-directory: go/client
-        run: go test -v -race ./...
+      - run: mise run test-client
 
   e2e:
     runs-on: ubuntu-latest
