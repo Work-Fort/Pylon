@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 
 // Package client provides a Go HTTP client for the Pylon service registry API.
 // It has zero dependencies on internal Pylon packages and can be imported

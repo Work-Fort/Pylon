@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 package client_test
 
 import (
@@ -9,7 +9,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/Work-Fort/Pylon/go/client"
+	"github.com/Work-Fort/Pylon/client/go"
 )
 
 func TestServices_Success(t *testing.T) {

@@ -5,7 +5,7 @@ on:
   push:
     branches: [master]
     paths:
-      - 'go/client/**'
+      - 'client/go/**'
 
 permissions:
   contents: write
@@ -40,8 +40,8 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           default_bump: false
           release_branches: master
-          tag_prefix: go/client/v
-          paths: go/client/**
+          tag_prefix: client/go/v
+          paths: client/go/**
 
       - name: Check if new tag was created
         id: check_tag
@@ -69,11 +69,11 @@ jobs:
           TAG: ${{ needs.tag.outputs.new_tag }}
           CHANGELOG: ${{ needs.tag.outputs.changelog }}
         run: |
-          VERSION=$(echo "$TAG" | sed 's|^go/client/v||')
+          VERSION=$(echo "$TAG" | sed 's|^client/go/v||')
           cat > release-notes.md << EOF
           # Go Client v${VERSION}
 
-          Module: \`github.com/Work-Fort/Pylon/go/client\`
+          Module: \`github.com/Work-Fort/Pylon/client/go\`
 
           ## What's Changed
 
@@ -82,7 +82,7 @@ jobs:
           ## Usage
 
           \`\`\`bash
-          go get github.com/Work-Fort/Pylon/go/client@${TAG}
+          go get github.com/Work-Fort/Pylon/client/go@${TAG}
           \`\`\`
 
           ---
