@@ -9,9 +9,9 @@
 #                The forbidigo rule below still prohibits leaking concrete
 #                types into function signatures even in test files.
 #
-#   forbidigo  — prevents *httpprober.Prober from appearing in any Go source
+#   forbidigo  — prevents httpprober.Prober from appearing in any Go source
 #                outside internal/infra/. Within infra, the qualified
-#                cross-package form (*httpprober.Prober) is never used —
+#                cross-package form (httpprober.Prober) is never used —
 #                infra methods use the unqualified *Prober receiver, so the
 #                pattern has zero false positives inside the adapter itself.
 #                This catches the "test-fixture leak": a helper that internally
@@ -59,7 +59,7 @@ linters:
                 parameter instead of constructing a concrete prober.
 
     forbidigo:
-      # Forbid the qualified concrete type *httpprober.Prober in function
+      # Forbid the qualified concrete type httpprober.Prober in function
       # signatures. This is the guard that test helpers must return a port
       # interface (domain.Prober), not the adapter. The infra package itself
       # uses the unqualified *Prober receiver, so this pattern has no false
@@ -67,9 +67,15 @@ linters:
       #
       # analyze-types is false (default): pattern matches against source text,
       # not type information. Sufficient for catching type-leaked signatures.
+      #
+      # NOTE: forbidigo matches against identifier text in the AST, not the
+      # full type expression. The * pointer sigil is a separate AST node and
+      # is NOT part of the identifier, so a leading \* in the regex defeats
+      # the rule entirely — it never fires. The patterns below correctly omit
+      # the leading asterisk. (Reference: nexus/.golangci.yml, commit 5978a08.)
       analyze-types: false
       forbid:
-        - pattern: '\*httpprober\.Prober'
+        - pattern: 'httpprober\.Prober'
           msg: >
             Use domain.Prober as the function parameter/return type — not
             the concrete *httpprober.Prober.
