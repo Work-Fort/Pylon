@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/lestrrat-go/jwx/v2/jwa"
@@ -17,13 +18,14 @@ import (
 
 // StartJWKSStub starts a JWKS stub server that serves:
 //   - GET /v1/jwks — the public key in JWKS format
-//   - POST /v1/verify-api-key — accepts any key and returns a canned identity
+//   - POST /v1/verify-api-key — accepts any key with wf_ prefix; rejects others
 //
 // It returns:
 //   - addr: the server address (host:port)
 //   - stop: function to stop the server
 //   - signJWT: function to create signed JWTs with the expected claims
-func StartJWKSStub() (addr string, stop func(), signJWT func(id, username, displayName, userType string) string) {
+//   - apiKeyVerifyCount: function that returns the number of verify-api-key calls made
+func StartJWKSStub() (addr string, stop func(), signJWT func(id, username, displayName, userType string) string, apiKeyVerifyCount func() int32) {
 	// Generate RSA key pair.
 	rawKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -66,6 +68,9 @@ func StartJWKSStub() (addr string, stop func(), signJWT func(id, username, displ
 		},
 	}
 
+	// Counter for verify-api-key calls (used by e2e tests to assert no fallthrough).
+	var verifyCount atomic.Int32
+
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /v1/jwks", func(w http.ResponseWriter, r *http.Request) {
@@ -74,6 +79,7 @@ func StartJWKSStub() (addr string, stop func(), signJWT func(id, username, displ
 	})
 
 	mux.HandleFunc("POST /v1/verify-api-key", func(w http.ResponseWriter, r *http.Request) {
+		verifyCount.Add(1)
 		var req struct {
 			Key string `json:"key"`
 		}
@@ -128,5 +134,9 @@ func StartJWKSStub() (addr string, stop func(), signJWT func(id, username, displ
 		return string(signedBytes)
 	}
 
-	return ln.Addr().String(), stopFn, signFn
+	countFn := func() int32 {
+		return verifyCount.Load()
+	}
+
+	return ln.Addr().String(), stopFn, signFn, countFn
 }

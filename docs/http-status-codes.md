@@ -33,13 +33,21 @@ manifest:
 
 ## Outbound: Pylon → Scope
 
-Scope calls `GET /api/services` on Pylon.
+Scope calls `GET /api/services` on Pylon. Pylon advertises supported
+Authorization schemes in `WWW-Authenticate: Bearer, ApiKey-v1` on all
+401 responses.
 
-| Condition          | Status | Response body                       |
-|--------------------|--------|-------------------------------------|
-| No Bearer token    | 200    | `{"passport_url": "https://..."}`   |
-| Valid Bearer token | 200    | `{"services": [...]}`               |
-| Invalid token      | 401    | `{"error": "invalid token"}`        |
+| Condition                     | Status | Response body                       |
+|-------------------------------|--------|-------------------------------------|
+| No Authorization header       | 200    | `{"passport_url": "https://..."}`   |
+| Valid `Bearer <jwt>`          | 200    | `{"services": [...]}`               |
+| Valid `ApiKey-v1 <wf-svc_*>`  | 200    | `{"services": [...]}`               |
+| Invalid or wrong-scheme token | 401    | `{"error": "invalid token"}`        |
+
+Scheme routing is strict: a `wf-svc_*` API key sent under `Bearer` is
+rejected (401) without forwarding to the API-key validator. Only web
+browser clients use JWT (`Bearer`); agents and services use API keys
+(`ApiKey-v1`).
 
 ## Pylon health
 

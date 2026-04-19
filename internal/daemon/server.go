@@ -101,17 +101,13 @@ func softAuth(jwtV, akV auth.Validator) func(http.Handler) http.Handler {
 				token = h[10:]
 				v = akV
 			default:
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusUnauthorized)
-				json.NewEncoder(w).Encode(map[string]string{"error": "invalid token"})
+				writeSoftAuthError(w)
 				return
 			}
 
 			id, err := v.Validate(r.Context(), token)
 			if err != nil {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusUnauthorized)
-				json.NewEncoder(w).Encode(map[string]string{"error": "invalid token"})
+				writeSoftAuthError(w)
 				return
 			}
 
@@ -119,6 +115,15 @@ func softAuth(jwtV, akV auth.Validator) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+// writeSoftAuthError writes a 401 Unauthorized response advertising the
+// supported Authorization schemes in WWW-Authenticate.
+func writeSoftAuthError(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("WWW-Authenticate", "Bearer, ApiKey-v1")
+	w.WriteHeader(http.StatusUnauthorized)
+	json.NewEncoder(w).Encode(map[string]string{"error": "invalid token"})
 }
 
 // ListenAndServe starts the server on the configured address.

@@ -35,12 +35,13 @@ func WithPollInterval(d string) DaemonOption {
 
 // Daemon wraps a running pylon daemon process.
 type Daemon struct {
-	cmd        *exec.Cmd
-	addr       string
-	xdgDir     string
-	stderrFile *os.File // *os.File (not bytes.Buffer) — see hardening notes
-	stubStop   func()
-	signJWT    func(id, username, displayName, userType string) string
+	cmd               *exec.Cmd
+	addr              string
+	xdgDir            string
+	stderrFile        *os.File // *os.File (not bytes.Buffer) — see hardening notes
+	stubStop          func()
+	signJWT           func(id, username, displayName, userType string) string
+	apiKeyVerifyCount func() int32
 }
 
 // StartDaemon builds a config file, starts the JWKS stub, and launches the
@@ -55,7 +56,7 @@ func StartDaemon(binary, addr string, opts ...DaemonOption) (*Daemon, error) {
 	}
 
 	// Start JWKS stub server before the daemon so the initial JWKS fetch succeeds.
-	stubAddr, stubStop, signJWT := StartJWKSStub()
+	stubAddr, stubStop, signJWT, apiKeyVerifyCount := StartJWKSStub()
 
 	xdgDir, err := os.MkdirTemp("", "pylon-e2e-*")
 	if err != nil {
@@ -138,12 +139,13 @@ func StartDaemon(binary, addr string, opts ...DaemonOption) (*Daemon, error) {
 		if err == nil {
 			conn.Close()
 			return &Daemon{
-				cmd:        cmd,
-				addr:       addr,
-				xdgDir:     xdgDir,
-				stderrFile: stderrFile,
-				stubStop:   stubStop,
-				signJWT:    signJWT,
+				cmd:               cmd,
+				addr:              addr,
+				xdgDir:            xdgDir,
+				stderrFile:        stderrFile,
+				stubStop:          stubStop,
+				signJWT:           signJWT,
+				apiKeyVerifyCount: apiKeyVerifyCount,
 			}, nil
 		}
 		time.Sleep(50 * time.Millisecond)
@@ -169,6 +171,20 @@ func (d *Daemon) XDGDir() string { return d.xdgDir }
 // The token is valid for 1 hour and signed with the JWKS stub's private key.
 func (d *Daemon) SignJWT(id, username, displayName, userType string) string {
 	return d.signJWT(id, username, displayName, userType)
+}
+
+// MintServiceAPIKey returns a service API key string that the JWKS stub will
+// accept. The stub accepts any key with the "wf_" prefix, so any value
+// generated here is deterministically valid for the lifetime of this daemon.
+func (d *Daemon) MintServiceAPIKey(name string) string {
+	return "wf_svc-" + name
+}
+
+// APIKeyVerifyCount returns the total number of POST /v1/verify-api-key calls
+// received by the JWKS stub since it started. Use this to assert that the
+// API-key validator was (or was not) called for a given request.
+func (d *Daemon) APIKeyVerifyCount() int32 {
+	return d.apiKeyVerifyCount()
 }
 
 // StopFatal stops the daemon and fails the test if a data race was

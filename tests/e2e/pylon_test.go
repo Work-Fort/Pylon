@@ -417,6 +417,85 @@ func TestServices_5xxError(t *testing.T) {
 	}
 }
 
+// TestPylon_ApiKeyV1AcceptedAtServices verifies that a valid API key under
+// the ApiKey-v1 scheme is accepted at /api/services and returns 200 with
+// the service listing. This covers the new scheme-dispatch behavior added
+// to close Cluster 3b at Pylon's daemon boundary.
+func TestPylon_ApiKeyV1AcceptedAtServices(t *testing.T) {
+	addr, err := harness.FreePort()
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := harness.StartDaemon(pylonBin, addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.StopFatal(t)
+
+	apiKey := d.MintServiceAPIKey("test-service")
+	req, err := http.NewRequest("GET", fmt.Sprintf("http://%s/api/services", addr), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "ApiKey-v1 "+apiKey)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /api/services: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+
+	wwwAuth := resp.Header.Get("WWW-Authenticate")
+	_ = wwwAuth // presence checked in negative test; not emitted on 200
+}
+
+// TestPylon_BearerForAPIKeyReturns401AndDoesNotVerify verifies that an API
+// key sent under the Bearer scheme is rejected with 401 AND triggers no call
+// to verify-api-key on the Passport stub. This is the load-bearing Cluster 3b
+// regression-prevention test: no cross-scheme fallthrough at the daemon boundary.
+func TestPylon_BearerForAPIKeyReturns401AndDoesNotVerify(t *testing.T) {
+	addr, err := harness.FreePort()
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := harness.StartDaemon(pylonBin, addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.StopFatal(t)
+
+	apiKey := d.MintServiceAPIKey("test-service")
+	beforeCount := d.APIKeyVerifyCount()
+
+	req, err := http.NewRequest("GET", fmt.Sprintf("http://%s/api/services", addr), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey) // wrong scheme for an API key
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /api/services: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusUnauthorized {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 401 (API key under Bearer must not be accepted); body: %s", resp.StatusCode, body)
+	}
+	if got := d.APIKeyVerifyCount(); got != beforeCount {
+		t.Errorf("verify-api-key called %d→%d times; expected no advance (no fallthrough)", beforeCount, got)
+	}
+	if got := resp.Header.Get("WWW-Authenticate"); got != "Bearer, ApiKey-v1" {
+		t.Errorf("WWW-Authenticate = %q, want %q", got, "Bearer, ApiKey-v1")
+	}
+}
+
 func TestServices_Timeout(t *testing.T) {
 	// Start a server that accepts connections but never responds,
 	// causing the prober's 5-second timeout to fire.
