@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/charmbracelet/log"
@@ -42,7 +41,7 @@ func NewServer(ctx context.Context, cfg ServerConfig) (*http.Server, error) {
 		return nil, fmt.Errorf("init JWT validator: %w", err)
 	}
 	akV := authapikey.New(opts.VerifyAPIKeyURL, opts.APIKeyCacheTTL)
-	mw := auth.NewFromValidators(jwtV, akV)
+	mw := auth.NewSchemeDispatch(jwtV, akV)
 
 	// /api/services uses soft auth: inject identity if token is valid,
 	// pass through if not. The handler decides what to return based on
@@ -78,32 +77,46 @@ func routeAuth(hardAuthed, softAuthed, unauthed http.Handler) http.Handler {
 	})
 }
 
-// softAuth tries to validate a bearer token and inject the identity into
-// context if valid, but always passes the request through to the next
-// handler regardless. This allows handlers to branch on identity presence.
-func softAuth(validators ...auth.Validator) func(http.Handler) http.Handler {
+// softAuth dispatches inbound auth by Authorization scheme: "Bearer <jwt>"
+// goes to jwtV, "ApiKey-v1 <key>" goes to akV. If no Authorization header
+// is present the request passes through unauthenticated (allowing handlers
+// to branch on identity presence). If a header is present but the scheme is
+// unknown, or validation fails, 401 is returned — no cross-scheme fallthrough.
+func softAuth(jwtV, akV auth.Validator) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			h := r.Header.Get("Authorization")
-			token, found := strings.CutPrefix(h, "Bearer ")
-			if !found || token == "" {
+			if h == "" {
 				next.ServeHTTP(w, r)
 				return
 			}
 
-			for _, v := range validators {
-				id, err := v.Validate(r.Context(), token)
-				if err == nil {
-					ctx := auth.ContextWithIdentity(r.Context(), id)
-					next.ServeHTTP(w, r.WithContext(ctx))
-					return
-				}
+			var v auth.Validator
+			var token string
+			switch {
+			case len(h) > 7 && h[:7] == "Bearer ":
+				token = h[7:]
+				v = jwtV
+			case len(h) > 10 && h[:10] == "ApiKey-v1 ":
+				token = h[10:]
+				v = akV
+			default:
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusUnauthorized)
+				json.NewEncoder(w).Encode(map[string]string{"error": "invalid token"})
+				return
 			}
 
-			// Token present but invalid — return 401
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusUnauthorized)
-			json.NewEncoder(w).Encode(map[string]string{"error": "invalid token"})
+			id, err := v.Validate(r.Context(), token)
+			if err != nil {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusUnauthorized)
+				json.NewEncoder(w).Encode(map[string]string{"error": "invalid token"})
+				return
+			}
+
+			ctx := auth.ContextWithIdentity(r.Context(), id)
+			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
 }
