@@ -1,0 +1,81 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# golangci-lint v2 configuration for pylon.
+#
+# Two rules enforce the hexagonal architecture boundary:
+#
+#   depguard   — prevents non-infra, non-cmd *production* code from importing
+#                concrete adapter packages (internal/infra/*).
+#                Test files may import them directly for unit-testing adapters.
+#                The forbidigo rule below still prohibits leaking concrete
+#                types into function signatures even in test files.
+#
+#   forbidigo  — prevents *httpprober.Prober from appearing in any Go source
+#                outside internal/infra/. Within infra, the qualified
+#                cross-package form (*httpprober.Prober) is never used —
+#                infra methods use the unqualified *Prober receiver, so the
+#                pattern has zero false positives inside the adapter itself.
+#                This catches the "test-fixture leak": a helper that internally
+#                constructs *httpprober.Prober but MUST return domain.Prober.
+#
+# NOTE: pylon is SQLite-free and Postgres-free. It uses only an HTTP prober
+# adapter (internal/infra/httpprober). If a storage adapter is added in the
+# future, add its import path to the depguard deny list and its concrete type
+# to the forbidigo patterns.
+#
+# NOTE: this config uses the golangci-lint v2 format (linters.settings nested
+# under linters, not top-level linters-settings). Run `golangci-lint config
+# verify` to confirm the schema is valid after any edits.
+
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - depguard
+    - forbidigo
+  settings:
+    depguard:
+      rules:
+        # Production (non-test) files outside internal/infra/ and cmd/ may not
+        # import the concrete adapter packages directly. All such code must
+        # depend on the port interfaces declared in internal/domain/ports.go.
+        #
+        # cmd/ is the composition root and is allowed to wire adapters.
+        # internal/infra/ contains the adapters themselves.
+        # _test.go files are excluded: they may construct concrete adapters
+        # directly for unit tests, but must return port-typed values (forbidigo).
+        infra-boundary:
+          files:
+            - "**/*.go"
+            - "!**/*_test.go"
+            - "!**/internal/infra/**"
+            - "!**/cmd/**"
+          list-mode: lax
+          deny:
+            - pkg: github.com/Work-Fort/Pylon/internal/infra/httpprober
+              desc: >
+                Production code outside internal/infra/ and cmd/ must not
+                depend on the httpprober adapter. Accept domain.Prober as a
+                parameter instead of constructing a concrete prober.
+
+    forbidigo:
+      # Forbid the qualified concrete type *httpprober.Prober in function
+      # signatures. This is the guard that test helpers must return a port
+      # interface (domain.Prober), not the adapter. The infra package itself
+      # uses the unqualified *Prober receiver, so this pattern has no false
+      # positives inside internal/infra/httpprober/.
+      #
+      # analyze-types is false (default): pattern matches against source text,
+      # not type information. Sufficient for catching type-leaked signatures.
+      analyze-types: false
+      forbid:
+        - pattern: '\*httpprober\.Prober'
+          msg: >
+            Use domain.Prober as the function parameter/return type — not
+            the concrete *httpprober.Prober.
+            See skills/lead/go-service-architecture/references/
+            architecture-reference.md §"Test Fixture Return Types".
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
