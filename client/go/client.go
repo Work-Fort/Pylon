@@ -14,17 +14,20 @@ import (
 type Client struct {
 	http    http.Client
 	baseURL string
-	token   string
+	apiKey  string
 }
 
-// New creates a Pylon client.
-// pylonURL is the base URL of the Pylon daemon (e.g., "http://pylon:18000").
-// token is a Passport JWT or API key sent as a Bearer token.
-func New(pylonURL, token string) *Client {
+// New creates a Pylon client that authenticates with a Passport API key
+// (Authorization: ApiKey-v1 <key>). API keys are recognizable by the
+// wf-agent_ or wf-svc_ prefix.
+//
+// Pylon's outbound clients are API-key-only — JWTs are reserved for
+// browser-routed traffic which never originates here.
+func New(pylonURL, apiKey string) *Client {
 	return &Client{
 		http:    http.Client{Timeout: 10 * time.Second},
 		baseURL: strings.TrimRight(pylonURL, "/"),
-		token:   token,
+		apiKey:  apiKey,
 	}
 }
 
@@ -35,8 +38,8 @@ func (c *Client) Services(ctx context.Context) ([]Service, error) {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Accept", "application/json")
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
+	if c.apiKey != "" {
+		req.Header.Set("Authorization", "ApiKey-v1 "+c.apiKey)
 	}
 
 	resp, err := c.http.Do(req)

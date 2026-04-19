@@ -5,8 +5,8 @@
 //
 // Usage:
 //
-//	c := client.New("http://pylon:18000", serviceToken)
+//	c := client.New("http://pylon:18000", serviceAPIKey)
 //	svc, err := c.ServiceByName(ctx, "hive")
 //	if err != nil { log.Fatal(err) }
-//	hiveClient := hive.New(svc.BaseURL, serviceToken)
+//	hiveClient := hive.New(svc.BaseURL, serviceAPIKey)
 package client

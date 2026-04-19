@@ -17,8 +17,8 @@ func TestServices_Success(t *testing.T) {
 		if r.URL.Path != "/api/services" {
 			t.Errorf("path = %q, want /api/services", r.URL.Path)
 		}
-		if got := r.Header.Get("Authorization"); got != "Bearer test-token" {
-			t.Errorf("auth = %q, want Bearer test-token", got)
+		if got := r.Header.Get("Authorization"); got != "ApiKey-v1 test-token" {
+			t.Errorf("auth = %q, want ApiKey-v1 test-token", got)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
@@ -145,5 +145,21 @@ func TestServiceByName_EmptyList(t *testing.T) {
 	_, err := c.ServiceByName(context.Background(), "anything")
 	if !errors.Is(err, client.ErrNotFound) {
 		t.Errorf("error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestClient_APIKeySendsApiKeyV1(t *testing.T) {
+	gotAuth := ""
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"services":[]}`))
+	}))
+	defer srv.Close()
+
+	c := client.New(srv.URL, "wf-svc_secret")
+	_, _ = c.Services(context.Background())
+	if gotAuth != "ApiKey-v1 wf-svc_secret" {
+		t.Errorf("Authorization = %q, want %q", gotAuth, "ApiKey-v1 wf-svc_secret")
 	}
 }
